@@ -1,30 +1,47 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace Slang.Core
 {
+    /*
+     * Grammar:
+     * <Statement> := <ExpressionAny> {Semicolon}
+     * TODO: <PrintStatement> := {Identifier:"print"} <ExpressionAny> {Semicolon}
+     * <ExpressionAny> := <ExpressionAddSubtract>
+     * <ExpressionAddSubtract> := <ExpressionMulDiv> ( ({Plus} or {Minus}) <ExpressionMulDiv> )*
+     * <ExpressionMulDiv> := <ExpressionLiteralOrParen> ( ({Asterisk} or {Frontslash}) <ExpressionLiteralOrParen> )*
+     * <ExpressionLiteralOrParen> := <ExpressionLiteral> | <ExpressionParen>
+     * <ExpressionLiteral> := {NumberLiteral}
+     * <ExpressionParen> := {OpenParen} <ExpressionAny> {CloseParen}
+     */
     public class Parser
     {
         public (List<IStatement> statements, List<Error> errors) Parse(IToken[] tokens)
         {
-            Span<IToken> tok = tokens;
             var statements = new List<IStatement>();
             var errors = new List<Error>();
+
+            var context = new ParserContext(ParserState.Unmatched, tokens, ImmutableList<Error>.Empty);
             
-            while (tok.Length > 0)
+            while (context.Tokens.Length > 0 && context[0] is not Token.EndOfFile)
             {
-                if (TryParseStatement(tok, out var newTok, out var statement))
+                if (context = TryParseStatement(context.Pass(), out var statement))
                 {
                     statements.Add(statement);
-                    tok = newTok;
                 }
                 else
                 {
                     // TODO: error handling needs to be better
-                    errors.Add(new Error(tok[0].Location, "Could not parse statement"));
+                    errors.AddRange(context.Errors);
+
+                    // only add this error if we don't have a better one
+                    if (context.State != ParserState.Errored)
+                        errors.Add(new Error(context.Tokens[0].Location, "Could not parse statement"));
+
                     break;
                 }
             }
@@ -32,49 +49,58 @@ namespace Slang.Core
             return (statements, errors);
         }
 
-        private bool TryParseStatement(Span<IToken> tok, out Span<IToken> newTok, out IStatement statement)
+        private ParserContext TryParseStatement(ParserContext initialContext, out IStatement statement)
         {
-            if (TryParseExpressionAny(tok, out var tmpTok, out IExpression expression))
+            ParserContext context = initialContext;
+            if (context = TryParseExpressionAny(context.Pass(), out IExpression expression))
             {
-                if (tmpTok.GetOrDefault(0) is Token.Semicolon)
+                if (context[0] is Token.Semicolon)
                 {
-                    newTok = tmpTok[1..];
                     statement = new Statement.Print(expression);
-                    return true;
+                    return context.With(ParserState.Matched, context.Tokens[1..]);
                 }
             }
 
             statement = default;
-            newTok = tok;
-            return false;
+            return initialContext;
         }
 
-        private bool TryParseExpressionAny(Span<IToken> tok, out Span<IToken> newTok, out IExpression expression)
+        private ParserContext TryParseExpressionAny(ParserContext initialContext, out IExpression expression)
         {
-            return TryParseExpressionAddSubtract(tok, out newTok, out expression);
+            return TryParseExpressionAddSubtract(initialContext.Pass(), out expression);
         }
 
-        private bool TryParseExpressionAddSubtract(Span<IToken> tok, out Span<IToken> newTok, out IExpression expression)
+        private ParserContext TryParseExpressionAddSubtract(ParserContext initialContext, out IExpression expression)
         {
-            if (TryParseExpressionMulDiv(tok, out var tmpTok, out var lhsExpression))
+            ParserContext context = initialContext;
+            if (context = TryParseExpressionMulDiv(context.Pass(), out var lhsExpression))
             {
                 // we go in a loop to allow left-associativity
                 while (true)
                 {
-                    var currentToken = tmpTok.GetOrDefault(0);
+                    var currentToken = context[0];
                     if (currentToken is not Token.Plus && currentToken is not Token.Minus)
                     {
-                        newTok = tmpTok;
                         expression = lhsExpression;
-                        return true;
+                        return context.With(ParserState.Matched);
                     }
 
-                    tmpTok = tmpTok[1..];
-                    if (!TryParseExpressionMulDiv(tmpTok, out tmpTok, out var rhsExpression))
+                    context = context.With(tokens: context.Tokens[1..]);
+                    if (! (context = TryParseExpressionMulDiv(context.Pass(), out var rhsExpression)) )
                     {
-                        newTok = tok;
                         expression = default;
-                        return false;
+
+                        // We matched an expression and a plus/minus, but we couldn't find another expression.
+                        // Only add an error if there isn't a deeper error.
+                        if (context.State != ParserState.Errored)
+                        {
+                            var error = new Error(context.Tokens[0].Location, "Expected expression");
+                            return initialContext.With(ParserState.Errored, error: error);
+                        }
+                        else
+                        {
+                            return initialContext;
+                        }
                     }
 
                     // if it worked
@@ -93,32 +119,42 @@ namespace Slang.Core
                 }
             }
 
-            newTok = tok;
             expression = default;
-            return false;
+            return initialContext; // unmatched
         }
 
-        private bool TryParseExpressionMulDiv(Span<IToken> tok, out Span<IToken> newTok, out IExpression expression)
+        private ParserContext TryParseExpressionMulDiv(ParserContext initialContext, out IExpression expression)
         {
-            if (TryParseExpressionLiteralOrParen(tok, out var tmpTok, out var lhsExpression))
+            ParserContext context = initialContext;
+
+            if (context = TryParseExpressionLiteralOrParen(context.Pass(), out var lhsExpression))
             {
                 // we go in a loop to allow left-associativity
                 while (true)
                 {
-                    var currentToken = tmpTok.GetOrDefault(0);
+                    var currentToken = context[0];
                     if (currentToken is not Token.Asterisk && currentToken is not Token.Frontslash)
                     {
-                        newTok = tmpTok;
                         expression = lhsExpression;
-                        return true;
+                        return context;
                     }
 
-                    tmpTok = tmpTok[1..];
-                    if (!TryParseExpressionLiteralOrParen(tmpTok, out tmpTok, out var rhsExpression))
+                    context = context.With(tokens: context.Tokens[1..]);
+                    if (! (context = TryParseExpressionLiteralOrParen(context.Pass(), out var rhsExpression)) )
                     {
-                        newTok = tok;
                         expression = default;
-                        return false;
+
+                        // We matched an expression and a asterisk/frontslash, but we couldn't find another expression.
+                        // Only add an error if there isn't a deeper error.
+                        if (context.State != ParserState.Errored)
+                        {
+                            var error = new Error(context.Tokens[0].Location, "Expected expression");
+                            return initialContext.With(ParserState.Errored, error: error);
+                        }
+                        else
+                        {
+                            return initialContext;
+                        }
                     }
 
                     // if it worked
@@ -137,67 +173,74 @@ namespace Slang.Core
                 }
             }
 
-            newTok = tok;
             expression = default;
-            return false;
+            return initialContext;
         }
 
-        private bool TryParseExpressionLiteralOrParen(Span<IToken> tok, out Span<IToken> newTok, out IExpression expression)
+        private ParserContext TryParseExpressionLiteralOrParen(ParserContext initialContext, out IExpression expression)
         {
-            if (TryParseExpressionLiteral(tok, out newTok, out expression))
+            ParserContext context;
+            if (context = TryParseExpressionLiteral(initialContext.Pass(), out expression))
             {
-                return true;
+                return context;
             }
 
-            if (TryParseExpressionParen(tok, out newTok, out expression))
+            if (context = TryParseExpressionParen(initialContext.Pass(), out expression))
             {
-                return true;
+                return context;
             }
 
-            newTok = tok;
             expression = default;
-            return false;
+            return initialContext;
         }
 
-        private bool TryParseExpressionLiteral(Span<IToken> tok, out Span<IToken> newTok, out IExpression expression)
+        private ParserContext TryParseExpressionLiteral(ParserContext initialContext, out IExpression expression)
         {
-            var currentToken = tok.GetOrDefault(0);
+            var currentToken = initialContext[0];
             if (currentToken is Token.NumberLiteral)
             {
-                newTok = tok[1..];
                 expression = new Expression.DoubleLiteral((Token.NumberLiteral)currentToken);
-                return true;
+                return initialContext.With(ParserState.Matched, initialContext.Tokens[1..]);
             }
 
-            newTok = tok;
             expression = default;
-            return false;
+            return initialContext;
         }
 
-        private bool TryParseExpressionParen(Span<IToken> tok, out Span<IToken> newTok, out IExpression expression)
+        private ParserContext TryParseExpressionParen(ParserContext initialContext, out IExpression expression)
         {
-            var currentToken = tok.GetOrDefault(0);
+            ParserContext context = initialContext;
+
+            var currentToken = context[0];
             if (currentToken is Token.OpenParen)
             {
-                // this should really produce an error, because we found an open paren but couldn't complete it
-                if (!TryParseExpressionAny(tok[1..], out var tmpTok, out var tmpExpression))
+                // matched an open paren, but couldn't match an expression... I guess this is ok?
+                if (! (context = TryParseExpressionAny(context.With(ParserState.Unmatched, context.Tokens[1..]), out var tmpExpression)) )
                 {
-                    newTok = tok;
                     expression = default;
-                    return false;
+                    return initialContext;
                 }
 
-                if (tmpTok.GetOrDefault(0) is Token.CloseParen)
+                if (context[0] is Token.CloseParen)
                 {
-                    newTok = tmpTok[1..];
                     expression = tmpExpression;
-                    return true;
+                    return context.With(ParserState.Matched, context.Tokens[1..]);
                 }
             }
 
-            newTok = tok;
-            expression = default;
-            return false;
+            // We found an open paren but couldn't complete it.
+            // Only add an error if there isn't a deeper error.
+            if (context.State != ParserState.Errored)
+            {
+                expression = default;
+                var error = new Error(context.Tokens[0].Location, "Expected ')'");
+                return initialContext.With(ParserState.Errored, error: error);
+            }
+            else
+            {
+                expression = default;
+                return initialContext;
+            }
         }
     }
 }

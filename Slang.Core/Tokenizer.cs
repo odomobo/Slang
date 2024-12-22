@@ -15,6 +15,9 @@
                 }
             }
 
+            var endOfFileToken = new Token.EndOfFile(new Location(lines.Last(), lines.Last().Text.Length));
+            tokens.Add(endOfFileToken);
+
             return (tokens, errors);
         }
 
