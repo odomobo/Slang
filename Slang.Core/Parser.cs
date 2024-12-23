@@ -2,11 +2,21 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace Slang.Core
 {
+    public class ParserPanic : Exception
+    {
+    }
+
+    public class Unreachable : Exception
+    {
+        public Unreachable() : base("Reached unreachable line") { }
+    }
+
     /*
      * Grammar:
      * <Statement> := <ExpressionAny> {Semicolon}
@@ -22,249 +32,216 @@ namespace Slang.Core
     // TODO: proper error handling
     public class Parser
     {
+        private List<Error> _errors;
+        private TokenHandle _tokens;
+
         public (List<IStatement> statements, List<Error> errors) Parse(IToken[] tokens)
         {
-            var statements = new List<IStatement>();
-            var errors = new List<Error>();
+            // TODO: move this to a constructor maybe????
+            _errors = new List<Error>();
+            _tokens = new TokenHandle(tokens);
 
-            var context = new ParserContext(ParserState.Unmatched, tokens, ImmutableList<Error>.Empty);
+            var statements = new List<IStatement>();
             
-            while (context.Tokens.Length > 0 && context[0] is not Token.EndOfFile)
+            while (!_tokens.EndOfStream())
             {
-                if (context = TryParseStatement(context.Pass(), out var statement))
+                var statement = ParseStatement();
+                statements.Add(statement);
+            }
+            
+            return (statements, _errors);
+        }
+
+        private IStatement ParseStatement()
+        {
+            try
+            {
+                var initialState = _tokens;
+                IExpression? expression;
+                if (null == (expression = TryParseExpressionAny()))
                 {
-                    statements.Add(statement);
+                    _errors.Add(_tokens.Error("Expected statement"));
+                    throw new ParserPanic();
+                }
+
+                if (_tokens[0] is not Token.Semicolon)
+                {
+                    // We parsed an expression, but there's a missing semicolon.
+                    _errors.Add(_tokens.Error("Expected semicolon"));
+                    throw new ParserPanic();
+                }
+                
+                _tokens = _tokens.Advance();
+                return new Statement.Print(expression);
+            } 
+            catch (ParserPanic)
+            {
+                // advance to next semicolon, and past it
+                _tokens = _tokens.AdvanceThrough(typeof(Token.Semicolon));
+                return new Statement.Unknown();
+            }
+        }
+
+        private IExpression? TryParseExpressionAny()
+        {
+            return TryParseExpressionAddSubtract();
+        }
+
+        private IExpression? TryParseExpressionAddSubtract()
+        {
+            var initialState = _tokens;
+            IExpression? lhsExpression;
+            if (null == (lhsExpression = TryParseExpressionMulDiv()) )
+            {
+                // this should be fine...
+                _tokens = initialState;
+                return null;
+            }
+
+            // we go in a loop to allow left-associativity
+            while (true)
+            {
+                var currentToken = _tokens[0];
+                if (currentToken is not Token.Plus && currentToken is not Token.Minus)
+                {
+                    return lhsExpression;
+                }
+
+                // advance past + or -
+                _tokens = _tokens.Advance();
+
+                IExpression? rhsExpression;
+                if (null == (rhsExpression = TryParseExpressionMulDiv()) )
+                {
+                    // We matched an expression and a plus/minus, but we couldn't find another expression.
+                    _errors.Add(_tokens.Error("Expected expression"));
+                    throw new ParserPanic();
+                }
+
+                // if it worked
+                if (currentToken is Token.Plus)
+                {
+                    lhsExpression = new Expression.DoubleAdd(currentToken, lhsExpression, rhsExpression);
+                }
+                else if (currentToken is Token.Minus)
+                {
+                    lhsExpression = new Expression.DoubleSubtract(currentToken, lhsExpression, rhsExpression);
                 }
                 else
                 {
-                    // TODO: error handling needs to be better
-                    errors.AddRange(context.Errors);
-
-                    // only add this error if we don't have a better one
-                    if (context.State != ParserState.Errored)
-                        errors.Add(new Error(context.Tokens[0].Location, "Could not parse statement"));
-
-                    break;
+                    throw new Unreachable();
                 }
             }
-            
-            return (statements, errors);
         }
 
-        private ParserContext TryParseStatement(ParserContext initialContext, out IStatement statement)
+        private IExpression? TryParseExpressionMulDiv()
         {
-            ParserContext context = initialContext;
-            if (context = TryParseExpressionAny(context.Pass(), out IExpression expression))
+            var initialState = _tokens;
+            IExpression? lhsExpression;
+            if (null == (lhsExpression = TryParseExpressionLiteralOrParen()))
             {
-                if (context[0] is Token.Semicolon)
+                // this should be fine...
+                _tokens = initialState;
+                return null;
+            }
+
+            // we go in a loop to allow left-associativity
+            while (true)
+            {
+                var currentToken = _tokens[0];
+                if (currentToken is not Token.Asterisk && currentToken is not Token.Frontslash)
                 {
-                    statement = new Statement.Print(expression);
-                    return context.With(ParserState.Matched, context.Tokens[1..]);
+                    return lhsExpression;
                 }
-            }
 
-            statement = default;
-            return initialContext;
-        }
+                // advance past * or /
+                _tokens = _tokens.Advance();
 
-        private ParserContext TryParseExpressionAny(ParserContext initialContext, out IExpression expression)
-        {
-            return TryParseExpressionAddSubtract(initialContext.Pass(), out expression);
-        }
-
-        private ParserContext TryParseExpressionAddSubtract(ParserContext initialContext, out IExpression expression)
-        {
-            ParserContext context = initialContext;
-            if (context = TryParseExpressionMulDiv(context.Pass(), out var lhsExpression))
-            {
-                // we go in a loop to allow left-associativity
-                while (true)
+                IExpression? rhsExpression;
+                if (null == (rhsExpression = TryParseExpressionLiteralOrParen()))
                 {
-                    var currentToken = context[0];
-                    if (currentToken is not Token.Plus && currentToken is not Token.Minus)
-                    {
-                        expression = lhsExpression;
-                        return context.With(ParserState.Matched);
-                    }
-
-                    context = context.With(tokens: context.Tokens[1..]);
-                    if (! (context = TryParseExpressionMulDiv(context.Pass(), out var rhsExpression)) )
-                    {
-                        expression = default;
-
-                        // We matched an expression and a plus/minus, but we couldn't find another expression.
-                        // Only add an error if there isn't a deeper error.
-                        if (context.State != ParserState.Errored)
-                        {
-                            var error = new Error(context.Tokens[0].Location, "Expected expression");
-                            return initialContext.With(ParserState.Errored, error: error);
-                        }
-                        else
-                        {
-                            return context;
-                        }
-                    }
-
-                    // if it worked
-                    if (currentToken is Token.Plus)
-                    {
-                        lhsExpression = new Expression.DoubleAdd(currentToken, lhsExpression, rhsExpression);
-                    }
-                    else if (currentToken is Token.Minus)
-                    {
-                        lhsExpression = new Expression.DoubleSubtract(currentToken, lhsExpression, rhsExpression);
-                    }
-                    else
-                    {
-                        throw new Exception("Shouldn't be able to reach here");
-                    }
+                    // We matched an expression and a asterisk/frontslash, but we couldn't find another expression.
+                    _errors.Add(_tokens.Error("Expected expression"));
+                    throw new ParserPanic();
                 }
-            }
-            if (context.State == ParserState.Errored)
-            {
-                expression = default;
-                return context;
-            }
 
-            expression = default;
-            return initialContext; // unmatched
-        }
-
-        private ParserContext TryParseExpressionMulDiv(ParserContext initialContext, out IExpression expression)
-        {
-            ParserContext context = initialContext;
-
-            if (context = TryParseExpressionLiteralOrParen(context.Pass(), out var lhsExpression))
-            {
-                // we go in a loop to allow left-associativity
-                while (true)
+                // if it worked
+                if (currentToken is Token.Asterisk)
                 {
-                    var currentToken = context[0];
-                    if (currentToken is not Token.Asterisk && currentToken is not Token.Frontslash)
-                    {
-                        expression = lhsExpression;
-                        return context;
-                    }
-
-                    context = context.With(tokens: context.Tokens[1..]);
-                    if (! (context = TryParseExpressionLiteralOrParen(context.Pass(), out var rhsExpression)) )
-                    {
-                        expression = default;
-
-                        // We matched an expression and a asterisk/frontslash, but we couldn't find another expression.
-                        // Only add an error if there isn't a deeper error.
-                        if (context.State != ParserState.Errored)
-                        {
-                            var error = new Error(context.Tokens[0].Location, "Expected expression");
-                            return initialContext.With(ParserState.Errored, error: error);
-                        }
-                        else
-                        {
-                            return initialContext;
-                        }
-                    }
-
-                    // if it worked
-                    if (currentToken is Token.Asterisk)
-                    {
-                        lhsExpression = new Expression.DoubleMultiply(currentToken, lhsExpression, rhsExpression);
-                    }
-                    else if (currentToken is Token.Frontslash)
-                    {
-                        lhsExpression = new Expression.DoubleDivide(currentToken, lhsExpression, rhsExpression);
-                    }
-                    else
-                    {
-                        throw new Exception("Shouldn't be able to reach here");
-                    }
+                    lhsExpression = new Expression.DoubleMultiply(currentToken, lhsExpression, rhsExpression);
+                }
+                else if (currentToken is Token.Frontslash)
+                {
+                    lhsExpression = new Expression.DoubleDivide(currentToken, lhsExpression, rhsExpression);
+                }
+                else
+                {
+                    throw new Exception("Shouldn't be able to reach here");
                 }
             }
-            if (context.State == ParserState.Errored)
-            {
-                expression = default;
-                return context;
-            }
-
-            expression = default;
-            return initialContext;
         }
 
-        private ParserContext TryParseExpressionLiteralOrParen(ParserContext initialContext, out IExpression expression)
+        private IExpression? TryParseExpressionLiteralOrParen()
         {
-            ParserContext context;
-            if (context = TryParseExpressionLiteral(initialContext.Pass(), out expression))
+            var initialState = _tokens;
+
+            IExpression? expression;
+            if (null != (expression = TryParseExpressionLiteral()) )
             {
-                return context;
+                return expression;
             }
 
-            if (context.State == ParserState.Errored)
+            if (null != (expression = TryParseExpressionParen()) )
             {
-                expression = default;
-                return context;
+                return expression;
             }
 
-            if (context = TryParseExpressionParen(initialContext.Pass(), out expression))
-            {
-                return context;
-            }
-
-            if (context.State == ParserState.Errored)
-            {
-                expression = default;
-                return context;
-            }
-
-            expression = default;
-            return initialContext;
+            _tokens = initialState;
+            return null;
         }
 
-        private ParserContext TryParseExpressionLiteral(ParserContext initialContext, out IExpression expression)
+        private IExpression? TryParseExpressionLiteral()
         {
-            var currentToken = initialContext[0];
+            var currentToken = _tokens[0];
             if (currentToken is Token.NumberLiteral)
             {
-                expression = new Expression.DoubleLiteral((Token.NumberLiteral)currentToken);
-                return initialContext.With(ParserState.Matched, initialContext.Tokens[1..]);
+                _tokens = _tokens.Advance();
+                return new Expression.DoubleLiteral((Token.NumberLiteral)currentToken);
             }
 
-            expression = default;
-            return initialContext;
+            return null;
         }
 
-        private ParserContext TryParseExpressionParen(ParserContext initialContext, out IExpression expression)
+        private IExpression? TryParseExpressionParen()
         {
-            ParserContext context = initialContext;
+            var initialState = _tokens;
 
-            var currentToken = context[0];
-            if (currentToken is Token.OpenParen)
+            var currentToken = _tokens[0];
+            if (currentToken is not Token.OpenParen)
+            {
+                _tokens = initialState;
+                return null;
+            }
+            
+            _tokens = _tokens.Advance();
+
+            IExpression? expression;
+            if (null == (expression = TryParseExpressionAny()))
             {
                 // matched an open paren, but couldn't match an expression... I guess this is ok?
-                if (! (context = TryParseExpressionAny(context.With(ParserState.Unmatched, context.Tokens[1..]), out var tmpExpression)) )
-                {
-                    expression = default;
-                    return initialContext;
-                }
+                _tokens = initialState;
+                return null;
+            }
 
-                if (context[0] is Token.CloseParen)
-                {
-                    expression = tmpExpression;
-                    return context.With(ParserState.Matched, context.Tokens[1..]);
-                }
+            if (_tokens[0] is Token.CloseParen)
+            {
+                _tokens = _tokens.Advance();
+                return expression;
             }
 
             // We found an open paren but couldn't complete it.
-            // Only add an error if there isn't a deeper error.
-            if (context.State != ParserState.Errored)
-            {
-                expression = default;
-                var error = new Error(context.Tokens[0].Location, "Expected ')'");
-                return initialContext.With(ParserState.Errored, error: error);
-            }
-            else
-            {
-                expression = default;
-                return context;
-            }
+            _errors.Add(_tokens.Error("Expected ')'"));
+            throw new ParserPanic();
         }
     }
 }

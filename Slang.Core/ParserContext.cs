@@ -8,6 +8,7 @@ using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace Slang.Core
 {
+    // TODO: delete this
     public enum ParserState
     {
         Unmatched,
@@ -15,6 +16,7 @@ namespace Slang.Core
         Errored,
     }
 
+    // TODO: delete this
     public readonly ref struct ParserContext
     {
         public ParserContext(ParserState state, Span<IToken> tokens, ImmutableList<Error> errors)
