@@ -18,6 +18,8 @@ namespace Slang.Core
      * <ExpressionLiteral> := {NumberLiteral}
      * <ExpressionParen> := {OpenParen} <ExpressionAny> {CloseParen}
      */
+
+    // TODO: proper error handling
     public class Parser
     {
         public (List<IStatement> statements, List<Error> errors) Parse(IToken[] tokens)
@@ -99,7 +101,7 @@ namespace Slang.Core
                         }
                         else
                         {
-                            return initialContext;
+                            return context;
                         }
                     }
 
@@ -117,6 +119,11 @@ namespace Slang.Core
                         throw new Exception("Shouldn't be able to reach here");
                     }
                 }
+            }
+            if (context.State == ParserState.Errored)
+            {
+                expression = default;
+                return context;
             }
 
             expression = default;
@@ -172,6 +179,11 @@ namespace Slang.Core
                     }
                 }
             }
+            if (context.State == ParserState.Errored)
+            {
+                expression = default;
+                return context;
+            }
 
             expression = default;
             return initialContext;
@@ -185,8 +197,20 @@ namespace Slang.Core
                 return context;
             }
 
+            if (context.State == ParserState.Errored)
+            {
+                expression = default;
+                return context;
+            }
+
             if (context = TryParseExpressionParen(initialContext.Pass(), out expression))
             {
+                return context;
+            }
+
+            if (context.State == ParserState.Errored)
+            {
+                expression = default;
                 return context;
             }
 
@@ -239,7 +263,7 @@ namespace Slang.Core
             else
             {
                 expression = default;
-                return initialContext;
+                return context;
             }
         }
     }
