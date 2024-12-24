@@ -1,4 +1,6 @@
-﻿namespace Slang.Core
+﻿using System.Text.RegularExpressions;
+
+namespace Slang.Core
 {
     public class Tokenizer
     {
@@ -241,10 +243,11 @@
             }
         }
 
+        private static readonly Regex ToLinesRegex = new Regex(@"(?<=\n)");
         private List<Line> ToLines(string filename, string file)
         {
             var ret = new List<Line>();
-            var splitFile = file.Split('\n');
+            var splitFile = ToLinesRegex.Split(file);
             for (int i = 0; i < splitFile.Length; i++)
             {
                 int lineNumber = i + 1;

@@ -8,6 +8,7 @@ namespace Slang.Core
 {
     public record Line (string Filename, string Text, int LineNumber)
     {
+        public int Length => Text.Length;
         public char? this[int index]
         {
             get
