@@ -18,10 +18,10 @@ namespace Slang.Core
         public int CurrentLineNumber => _line + 1;
         public int CurrentLinePosition => _linePos + 1;
 
-        public CharHandle(string file, Line[] lines)
+        public CharHandle(string file, IEnumerable<Line> lines)
         {
             File = file;
-            Lines = lines;
+            Lines = lines.ToArray();
 
             _line = 0;
             _linePos = 0;
@@ -86,6 +86,9 @@ namespace Slang.Core
             int length = 1;
             if (endLocation != null)
             {
+                if (endLocation._filePos < _filePos)
+                    throw new InvalidOperationException();
+
                 // if the lines are different, then we'll just say it's all the rest of this line
                 if (endLocation._line != _line)
                 {
@@ -98,6 +101,16 @@ namespace Slang.Core
             }
 
             return new Location(CurrentLine, _linePos, length);
+        }
+
+        [Pure]
+        public string GetString(CharHandle endLocation)
+        {
+            if (endLocation._filePos < _filePos)
+                throw new InvalidOperationException();
+
+            var length = endLocation._filePos - _filePos;
+            return File.Substring(_filePos, length);
         }
 
         [Pure]

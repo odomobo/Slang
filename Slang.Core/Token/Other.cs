@@ -9,6 +9,7 @@ namespace Slang.Core
     // pseudo namespace
     public static partial class Token
     {
+        public record Unknown(Location Location) : IToken { }
         public record EndOfFile(Location Location) : IToken { }
     }
 }

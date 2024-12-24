@@ -6,9 +6,15 @@ namespace Slang
     {
         static void Main(string[] args)
         {
-            var source = @"(1 + 2) * 12; 12 * 1 + 2; 3 / 10000;
-200 * 400; 5 - 4;
-6/(3*2); 1 * 2 + 3 * (4);";
+            var source = @"
+(1 + 2) * 12;
+12 * 1 + 2;
+3 / 10000;
+200 * 400;
+5 - 4;
+6/(3*2);
+1 * 2 + 3 * (4);
+";
             var filename = "<src>";
 
             var tokenizer = new Tokenizer();
