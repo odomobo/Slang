@@ -20,7 +20,8 @@ namespace Slang.Core
             var lastToken = tokens.LastOrDefault();
             if (lastToken != null)
             {
-                EndOfFileToken = new Token.EndOfFile(new Location(lastToken.Location.Line, lastToken.Location.Line.Text.Length));
+                var lastLocation = lastToken.Location;
+                EndOfFileToken = new Token.EndOfFile(new Location(lastLocation.Line, lastLocation.Position + lastLocation.Length));
             }
             else
             {
@@ -58,7 +59,9 @@ namespace Slang.Core
             for (i = Position; i < Tokens.Length; i++)
             {
                 var token = Tokens[i];
-                if (types.Contains(token.GetType()))
+                var tokenType = token.GetType();
+                // instead of this, iterate over types and use is
+                if ( types.Any(t => t.IsAssignableFrom(tokenType)) )
                 {
                     break;
                 }
