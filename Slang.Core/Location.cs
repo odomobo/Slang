@@ -14,7 +14,9 @@ namespace Slang.Core
             // file1.sl:12:9: Invalid token
             // var x = %1;
             //         ^
-            return $"{Line.Filename}:{Line.LineNumber}:{Position + 1}: {message}\n{Line.Text}\n{"".PadRight(Position)}{"".PadRight(Length, '^')}\n";
+
+            var line = Line.Text.TrimEnd('\r', '\n');
+            return $"{Line.Filename}:{Line.LineNumber}:{Position + 1}: {message}\n{line}\n{"".PadRight(Position)}{"".PadRight(Length, '^')}\n";
         }
 
         public string GetTokenString()

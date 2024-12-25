@@ -90,7 +90,7 @@ namespace Slang.Core
         [Pure]
         public Error Error(string message = "Unknown error")
         {
-            return new Error(this[Position].Location, message);
+            return new Error(this[0].Location, message);
         }
     }
 }
